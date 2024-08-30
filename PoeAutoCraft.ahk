@@ -1,38 +1,8 @@
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-; Copyright (c) 2017, Nidark
-; All rights reserved.
-;
-; Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
-;   * Partial or integral redistributions of source code in any form (code/binary) cannot be sold, but only provided free of any charge.
-;   * Partial or integral redistributions of source code in any form (code/binary) must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-;   * The name of the contributors may not be used to endorse or promote products derived from this software without specific prior written permission.
-;
-; THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-; The most updated version is always here: https://github.com/nidark/Poe-Companion
-; Support: https://discord.gg/qfDkyTs
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-; If you need to make changes, DONT change the variables from the script! 
-; Change them in the PoeCompanion.INI file!
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-; Most of the functions will work without any INI changes for windowed full-screen 1920x1080 Steam Edition DX11, having the wisdom & portal scrolls respectively on the last 2 positions of the first row. 
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-; The SwichGem function & Auto-flask will work only if you have the same setup like me.   
-; But most probably you will need to adjust those positions & flask logic in INI using "ALT+O", as this is mostly character & skill-key based.
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-; For different setups (resolutions and/or scroll positions) you need to use the "ALT+O" function and change the coordonates in the INI file.
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
+#Include Gdip.ahk 
 #IfWinActive Path of Exile
 #SingleInstance force
 #NoEnv  
-#Warn  
+; #Warn
 #Persistent 
 #MaxThreadsPerHotkey 3
 
@@ -41,6 +11,14 @@ SendMode Input
 CoordMode, Mouse, Client
 SetWorkingDir %A_ScriptDir%  
 Thread, interrupt, 0
+SetBatchLines, -1
+
+OnExit, Cleanup
+
+; Initialize GDI+ for drawing
+pToken := Gdip_Startup()
+OnExit, Cleanup
+
 
 I_Icon = PoeC.ico
 IfExist, %I_Icon%
@@ -52,39 +30,34 @@ global Speed=1
 global Tick=250
 
 ;Coordinates
-global GuiX=-5
+global GuiX=5
 global GuiY=1005
 
-;ItemSwap
-global CurrentGemX=1483
-global CurrentGemY=372
-global AlternateGemX=1379 
-global AlternateGemY=171
-global AlternateGemOnSecondarySlot=1
-
-;AutoPot Setup
-global ChatColor=0x0E6DBF
-global ChatX1=10
-global ChatY1=875
-global ChatX2=24
-global ChatY2=890
-
-
 global CurencySpam=False
-global exitLoop := False
+global TrigerColor=0x73AFE6
 global Px=0
 global Py=0
 global countV=0
+
+; Area where search for success item is performed
+global topLeftX := 379, topLeftY := 548
+global bottomRightX := 502, bottomRightY := 779
+
 ; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 If FileExist("PoeAutoCraft.ini"){ 
-	IniWrite, %GuiX%, PoeCompanion.ini, Coordinates, GuiX
-	IniWrite, %GuiY%, PoeCompanion.ini, Coordinates, GuiY
+	IniRead, %GuiX%, PoeAutoCraft.ini, Coordinates, GuiX
+	IniRead, %GuiY%, PoeAutoCraft.ini, Coordinates, GuiY
+	IniRead, %Speed%, PoeAutoCraft.ini, General, Speed
+	IniRead, %TrigerColor%, PoeAutoCraft.ini, General, TrigerColor
  	
 } else {
-	IniWrite, %GuiX%, PoeCompanion.ini, Coordinates, GuiX
-	IniWrite, %GuiY%, PoeCompanion.ini, Coordinates, GuiY
+	IniWrite, %GuiX%, PoeAutoCraft.ini, Coordinates, GuiX
+	IniWrite, %GuiY%, PoeAutoCraft.ini, Coordinates, GuiY
+	IniWrite, %TrigerColor%, PoeAutoCraft.ini, General, TrigerColor
 }
+
+
 ; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ; Gui (default bottom left)
 ; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -93,10 +66,43 @@ Gui +LastFound +AlwaysOnTop +ToolWindow
 WinSet, TransColor, 0X130F13
 Gui -Caption
 Gui, Font, bold cFFFFFF S10, Trebuchet MS
-Gui, Add, Text, y+0.5 BackgroundTrans vT1, Auto-Craft: OFF
-Gui, Add, Text, y+0.5 BackgroundTrans vT2, Current-Tries: 0 
-Gui, Show, x%GuiX% y%GuiY%
-; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+; Gui for speed adjustments, placed above Auto-Craft field
+Gui, Add, Text, x5 y800 h30 Center, Speed:  ; "Speed" label, centered and positioned lower
+Gui, Add, Button, x+10 h30 gDecreaseSpeed, -  ; Decrease speed button
+Gui, Add, Edit, vSpeedEdit x+5 w40 h30 readonly Center, %Speed%  ; Speed input field
+Gui, Add, Button, x+5 h30 gIncreaseSpeed, +  ; Increase speed button
+Gui, Add, Button, x+10 h30 gSelectArea, Select Area  ; Select Area button, placed to the right of speed adjustment buttons
+
+; Auto-Craft status and Current-Tries fields
+Gui, Add, Text, x0 y+20 BackgroundTrans vT1, Auto-Craft: OFF  ; "Auto-Craft" field, positioned lower
+Gui, Add, Text, y+0.5 BackgroundTrans vT2, Current-Tries: 0  ; "Current-Tries" field
+
+; Create a full-screen transparent GUI for drawing
+Gui, +AlwaysOnTop +ToolWindow -Caption +E0x80000 ; E0x80000 = WS_EX_LAYERED (transparent background)
+Gui, Show, w%A_ScreenWidth% h%A_ScreenHeight%, SelectionOverlay ; Full screen transparent overlay
+
+hwnd := WinExist("A")
+hbm := CreateDIBSection(A_ScreenWidth, A_ScreenHeight)
+hdc := CreateCompatibleDC()
+obm := SelectObject(hdc, hbm)
+pGraphics := Gdip_GraphicsFromHDc(hdc)
+Gdip_SetSmoothingMode(pGraphics, 4)
+
+; Set the GUI to be initially transparent
+UpdateLayeredWindow(hwnd, hdc, 0, 0, A_ScreenWidth, A_ScreenHeight)
+return
+
+DecreaseSpeed:
+    Speed > 1.2 ? Speed-=0.2 : Speed:=1
+    GuiControl,, SpeedEdit, %Speed%
+return
+
+IncreaseSpeed:
+    Speed < 3.5 ? Speed+=0.2 : Speed:=Speed
+    GuiControl,, SpeedEdit, %Speed%
+return
+
 
 ; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ; KEY Binding
@@ -109,26 +115,29 @@ $!F1::ExitApp  ; Alt+F1: Exit the script
 ; -----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 !+J::
+	BlockInput, On
 	CurencySpam := True
 	countV := 0
 	GuiUpdate()
-	Send {ShiftDown} 
 	CoordMode, Pixel, Screen
+	Send {Shift down}
 	Loop{
 		GuiUpdateCounter()
-		PixelSearch, Px, Py, 379, 548, 502, 779, 0x77B4E7, 3, Fast
+		PixelSearch, Px, Py, topLeftX, topLeftY, bottomRightX, bottomRightY, TrigerColor, 3, Fast
 		Sleep, 50
-		ToolTip, ErrorLevel: %ErrorLevel%  Px: %Px%  Py: %Py%
+		ToolTip, % (ErrorLevel = 0) ? "Success" : "Failure"
 		if (ErrorLevel = 0) {
+			SoundPlay, %A_ScriptDir%\audio\gay-echo.mp3
 			break
 		}
 		if (GetKeyState("K", "P") and GetKeyState("Alt", "P")){
 			break
 		}
 		Click
-		RandomSleep(500,1000)
+		RandomSleep(500,700)
 	}
-	Send {ShiftUp} 
+	Send {Shift up}
+	BlockInput, Off
 	CurencySpam := False
 	GuiUpdate()
 	return
@@ -140,26 +149,28 @@ RandomSleep(min,max){
 	return
 }
 
-; ^!z::  ; Control+Alt+Z hotkey to check for color in cursor cords
-; MouseGetPos, MouseX, MouseY
-; PixelGetColor, color, %MouseX%, %MouseY%
-; ToolTip, Color: %color% coordinates: %MouseX% , %MouseY%
-; return
 
-; ^!z:: ; Control+Alt+Z hotkey to check cursor cords
-;     MouseGetPos, xpos, ypos
-; 	PixelGetColor, xycolor , xpos, ypos
-;     msgbox, X=%xpos% Y=%ypos% XYColor=%xycolor%
-; 	return
+^!O:: CheckColorInArea()
+^!I:: CheckColorInCursor()
 
-; $!O:: Alt+O hotkey to check for color in area
-; 	CoordMode, Pixel, Screen
-; 	PixelSearch, Px, Py, 379, 548, 502, 779, 0x77B4E7, 3, Fast
-; 	if (ErrorLevel = 0){
-; 		msgbox, 'Found x=' %Px% 'y=' %Py%
-; 	}
-;     msgbox, %ErrorLevel%
-; 	return
+; Check cursor cords
+CheckColorInCursor(){
+	MouseGetPos, xpos, ypos
+	PixelGetColor, xycolor , xpos, ypos
+    msgbox, X=%xpos% Y=%ypos% XYColor=%xycolor%
+	return
+}
+
+;Control +Alt+O hotkey to check for color in area
+CheckColorInArea(){	
+	CoordMode, Pixel, Screen
+	PixelSearch, Px, Py, 0, 0, 502, 779, TrigerColor, 5, Fast
+	if (ErrorLevel = 0){
+    	Tooltip, 'Found x=' %Px% 'y=' %Py%
+	}
+    Tooltip, 'Not found'
+	return
+}
 
 GuiUpdate(){
 	if (CurencySpam = True) {
@@ -178,3 +189,70 @@ GuiUpdateCounter(){
     Gui, Show, AutoSize
     return
 }
+
+
+SelectArea:
+    Tooltip, Click and drag to select an area
+    ; Wait for the user to start dragging with the left mouse button
+    Loop
+    {
+        Sleep, 10
+        if (GetKeyState("LButton", "P"))
+        {
+            MouseGetPos, topLeftX, topLeftY
+            break
+        }
+    }
+
+    ; Draw the rectangle dynamically while dragging
+    Loop
+    {
+        Sleep, 10
+        if !GetKeyState("LButton", "P")
+            break
+
+        MouseGetPos, x, y
+
+        ; Calculate rectangle dimensions
+        width := abs(x - topLeftX)
+        height := abs(y - topLeftY)
+
+        ; Determine the top-left corner
+        topLeftX_Draw := (x < topLeftX) ? x : topLeftX
+        topLeftY_Draw := (y < topLeftY) ? y : topLeftY
+
+        ; Clear previous drawing
+        Gdip_GraphicsClear(pGraphics)
+
+        ; Create a semi-transparent brush
+        pBrush := Gdip_BrushCreateSolid(0x8000FF00) ; ARGB format: 50% alpha (semi-transparent), green color
+
+        ; Draw the rectangle
+        Gdip_FillRectangle(pGraphics, pBrush, topLeftX_Draw, topLeftY_Draw, width, height)
+        
+        ; Display the updated image in the GUI
+        UpdateLayeredWindow(hwnd, hdc, 0, 0, A_ScreenWidth, A_ScreenHeight, 100)
+        
+        ; Delete the brush to avoid memory leaks
+        Gdip_DeleteBrush(pBrush)
+    }
+
+    ; Update the final rectangle coordinates
+    MouseGetPos, bottomRightX, bottomRightY
+
+    ; Display the selected area coordinates in a tooltip
+    Tooltip, Selected Area: %topLeftX% - %topLeftY% to %bottomRightX% - %bottomRightY%
+
+    ; Clear the drawing after selection is complete
+    Gdip_GraphicsClear(pGraphics)
+    UpdateLayeredWindow(hwnd, hdc, 0, 0, A_ScreenWidth, A_ScreenHeight)
+return
+
+Cleanup:
+    Gdip_DeleteGraphics(pGraphics)
+    SelectObject(hdc, obm)
+    DeleteObject(hbm)
+    DeleteDC(hdc)
+    Gdip_Shutdown(pToken)
+    ExitApp
+return
