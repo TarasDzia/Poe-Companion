@@ -35,6 +35,7 @@ global GuiY=1005
 
 global CurencySpam=False
 global TrigerColor=0x73AFE6
+global convertedToRgb=ConvertBGRtoRGB(TrigerColor)
 global Px=0
 global Py=0
 global countV=0
@@ -70,13 +71,17 @@ Gui, Font, bold cFFFFFF S10, Trebuchet MS
 ; Gui for speed adjustments, placed above Auto-Craft field
 Gui, Add, Text, x5 y800 h30 Center, Speed:  ; "Speed" label, centered and positioned lower
 Gui, Add, Button, x+10 h30 gDecreaseSpeed, -  ; Decrease speed button
-Gui, Add, Edit, vSpeedEdit x+5 w40 h30 readonly Center, %Speed%  ; Speed input field
+Gui, Add, Edit, vSpeedEdit x+5   h30 readonly Center, %Speed%  ; Speed input field
 Gui, Add, Button, x+5 h30 gIncreaseSpeed, +  ; Increase speed button
 Gui, Add, Button, x+10 h30 gSelectArea, Select Area  ; Select Area button, placed to the right of speed adjustment buttons
 
 ; Auto-Craft status and Current-Tries fields
 Gui, Add, Text, x0 y+20 BackgroundTrans vT1, Auto-Craft: OFF  ; "Auto-Craft" field, positioned lower
 Gui, Add, Text, y+0.5 BackgroundTrans vT2, Current-Tries: 0  ; "Current-Tries" field
+
+; Color Picker Button
+Gui, Add, Button, x0 y+10 h30 gPickColor vPickColorButton BackgroundFFFFFF Center, Pick Color
+Gui, Add, Text, +c%convertedToRgb% x+5 vColorDisplay h40 w90 Center, Selected Color: Default
 
 ; Create a full-screen transparent GUI for drawing
 Gui, +AlwaysOnTop +ToolWindow -Caption +E0x80000 ; E0x80000 = WS_EX_LAYERED (transparent background)
@@ -123,7 +128,7 @@ $!F1::ExitApp  ; Alt+F1: Exit the script
 	Send {Shift down}
 	Loop{
 		GuiUpdateCounter()
-		PixelSearch, Px, Py, topLeftX, topLeftY, bottomRightX, bottomRightY, TrigerColor, 3, Fast
+	    PixelSearch, Px, Py,topLeftX, topLeftY, bottomRightX, bottomRightY, TrigerColor, 20, Fast
 		Sleep, 50
 		ToolTip, % (ErrorLevel = 0) ? "Success" : "Failure"
 		if (ErrorLevel = 0) {
@@ -164,7 +169,8 @@ CheckColorInCursor(){
 ;Control +Alt+O hotkey to check for color in area
 CheckColorInArea(){	
 	CoordMode, Pixel, Screen
-	PixelSearch, Px, Py, 0, 0, 502, 779, TrigerColor, 5, Fast
+	PixelSearch, Px, Py, topLeftX, topLeftY, bottomRightX, bottomRightY, TrigerColor, 3, Fast
+    Sleep, 80
 	if (ErrorLevel = 0){
     	Tooltip, 'Found x=' %Px% 'y=' %Py%
 	}
@@ -247,6 +253,57 @@ SelectArea:
     Gdip_GraphicsClear(pGraphics)
     UpdateLayeredWindow(hwnd, hdc, 0, 0, A_ScreenWidth, A_ScreenHeight)
 return
+
+
+; -------------------------------------------------------------------------------------------------------------------
+; Button Click Handler - Pick Color
+; -------------------------------------------------------------------------------------------------------------------
+PickColor:
+	CoordMode, Pixel, Screen
+    ToolTip, Please click anywhere on the screen to pick a color.
+    
+    SetTimer, ShowColorUnderMouse, 50
+    ; Wait for the user to click
+    KeyWait, LButton, D
+    SetTimer, ShowColorUnderMouse, Off
+    ToolTip
+      ; Get mouse position and pixel color
+    MouseGetPos, mouseX, mouseY
+    PixelGetColor, pickedColor, %mouseX%, %mouseY%
+    
+    ; Convert color to hex format
+    pickedColorHex := Format("{:02X}{:02X}{:02X}", (pickedColor >> 16) & 0xFF, (pickedColor >> 8) & 0xFF, pickedColor & 0xFF)
+    
+    ; Update GUI to display the picked color
+    TrigerColor:=pickedColor
+    convertedToRgb:=ConvertBGRtoRGB(TrigerColor)
+    GuiControl, +C%convertedToRgb%, PickColorButton  ; Simulate button color change by changing Text background
+    GuiControl,, ColorDisplay, Selected Color: %convertedToRgb%
+    GuiControl, +c%convertedToRgb%, ColorDisplay  ; Change the text color of "Selected Color"
+return
+
+ShowColorUnderMouse:
+    ; Get the current mouse position
+    MouseGetPos, mouseX, mouseY
+
+    ; Get the color at the current mouse position in RGB format
+    PixelGetColor, color, %mouseX%, %mouseY% RGB
+
+    ; Convert RGB to hexadecimal format (e.g., 0xFFFFFF)
+    colorHex := Format("{:06X}", color)
+
+    ; Display the color in the tooltip along with cursor position
+    ToolTip, Current Color: #%colorHex%`nX: %mouseX% Y: %mouseY%
+    GuiControl, +c%color%, ColorDisplay  ; Change the text color of "Selected Color"
+Return
+
+ConvertBGRtoRGB(bgrColor) {
+    blue := (bgrColor >> 16) & 0xFF
+    green := (bgrColor >> 8) & 0xFF
+    red := bgrColor & 0xFF
+    rgbColor := (red << 16) | (green << 8) | blue
+    return rgbColor
+}
 
 Cleanup:
     Gdip_DeleteGraphics(pGraphics)
